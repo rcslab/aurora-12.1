@@ -55,7 +55,7 @@ __FBSDID("$FreeBSD$");
 #include <sys/sbuf.h>
 
 #ifdef _KERNEL
-static MALLOC_DEFINE(M_SBUF, "sbuf", "string buffers");
+MALLOC_DEFINE(M_SBUF, "sbuf", "string buffers");
 #define	SBMALLOC(size)		malloc(size, M_SBUF, M_WAITOK|M_ZERO)
 #define	SBFREE(buf)		free(buf, M_SBUF)
 #else /* _KERNEL */
@@ -78,11 +78,6 @@ static MALLOC_DEFINE(M_SBUF, "sbuf", "string buffers");
 #define	SBUF_ISDRAINTOEOR(s)	((s)->s_flags & SBUF_DRAINTOEOR)
 #define	SBUF_DODRAINTOEOR(s)	(SBUF_ISSECTION(s) && SBUF_ISDRAINTOEOR(s))
 
-/*
- * Set / clear flags
- */
-#define	SBUF_SETFLAG(s, f)	do { (s)->s_flags |= (f); } while (0)
-#define	SBUF_CLEARFLAG(s, f)	do { (s)->s_flags &= ~(f); } while (0)
 
 #define	SBUF_MINSIZE		 2		/* Min is 1 byte + nulterm. */
 #define	SBUF_MINEXTENDSIZE	16		/* Should be power of 2. */

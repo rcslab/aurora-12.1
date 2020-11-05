@@ -42,6 +42,7 @@
 #include <sys/priority.h>
 #include <sys/seq.h>
 #include <sys/sx.h>
+#include <sys/uio.h>
 
 #include <machine/_limits.h>
 
@@ -240,10 +241,16 @@ fd_modified(struct filedesc *fdp, int fd, seq_t seq)
 }
 #endif
 
+int kern_chroot(struct thread *td, char *path, enum uio_seg segflg);
+
 /* cdir/rdir/jdir manipulation functions. */
 void	pwd_chdir(struct thread *td, struct vnode *vp);
 int	pwd_chroot(struct thread *td, struct vnode *vp);
 void	pwd_ensure_dirs(void);
+
+int fdisused(struct filedesc *fdp, int fd);
+void fdused(struct filedesc *fdp, int fd);
+void fdunused(struct filedesc *fdp, int fd);
 
 #endif /* _KERNEL */
 

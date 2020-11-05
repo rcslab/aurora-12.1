@@ -150,7 +150,8 @@ static TAILQ_HEAD(, swdevt) swtailq = TAILQ_HEAD_INITIALIZER(swtailq);
 static struct swdevt *swdevhd;	/* Allocate from here next */
 static int nswapdev;		/* Number of swap devices */
 int swap_pager_avail;
-static struct sx swdev_syscall_lock;	/* serialize swap(on|off) */
+struct sx swdev_syscall_lock;	/* serialize swap(on|off) */
+int swap_swapon_enabled = true;
 
 static u_long swap_reserved;
 static u_long swap_total;
@@ -2213,6 +2214,11 @@ sys_swapon(struct thread *td, struct swapon_args *uap)
 		return (error);
 
 	sx_xlock(&swdev_syscall_lock);
+
+	if (!swap_swapon_enabled) {
+		error = EPERM;
+		goto done;
+	}
 
 	/*
 	 * Swap metadata may not fit in the KVM if we have physical

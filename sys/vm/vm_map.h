@@ -358,6 +358,7 @@ long vmspace_resident_count(struct vmspace *vmspace);
 #define	MAP_CREATE_STACK_GAP_UP	0x00010000
 #define	MAP_CREATE_STACK_GAP_DN	0x00020000
 #define	MAP_VN_EXEC		0x00040000
+#define	MAP_NO_MERGE		0x00080000
 
 /*
  * vm_fault option flags

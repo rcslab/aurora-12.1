@@ -351,6 +351,25 @@ int 	kqfd_register(int fd, struct kevent *kev, struct thread *p,
 	    int mflag);
 int	kqueue_add_filteropts(int filt, struct filterops *filtops);
 int	kqueue_del_filteropts(int filt);
+int	kqueue_register(struct kqueue *kq, struct kevent *kev,
+		    struct thread *td, int mflag);
+int	kqueue_acquire(struct file *fp, struct kqueue **kqp);
+void	kqueue_release(struct kqueue *kq, int locked);
+
+#define KN_HASH(val, mask)	(((val) ^ (val >> 8)) & (mask))
+
+#define KQ_LOCK(kq) do {						\
+	mtx_lock(&(kq)->kq_lock);					\
+} while (0)
+#define KQ_UNLOCK(kq) do {						\
+	mtx_unlock(&(kq)->kq_lock);					\
+} while (0)
+#define KQ_OWNED(kq) do {						\
+	mtx_assert(&(kq)->kq_lock, MA_OWNED);				\
+} while (0)
+#define KQ_NOTOWNED(kq) do {						\
+	mtx_assert(&(kq)->kq_lock, MA_NOTOWNED);			\
+} while (0)
 
 #else 	/* !_KERNEL */
 

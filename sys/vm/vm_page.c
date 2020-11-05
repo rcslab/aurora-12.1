@@ -1818,6 +1818,13 @@ vm_page_alloc_domain_after(vm_object_t object, vm_pindex_t pindex, int domain,
 
 	flags = 0;
 	m = NULL;
+	/* 
+	 * XXX Here we can check if the object is an Aurora shadow object (XXX 
+	 * create the flag for Aurora objects that are shadows and not in 
+	 * Aurora per se), and maybe select a persistent memory page instead of 
+	 * a regular one. We can check the pool to see what kind of page we are 
+	 * handling.
+	 */
 	pool = object != NULL ? VM_FREEPOOL_DEFAULT : VM_FREEPOOL_DIRECT;
 again:
 #if VM_NRESERVLEVEL > 0
@@ -3400,7 +3407,7 @@ vm_page_free_prep(vm_page_t m)
 	if ((m->oflags & VPO_UNMANAGED) == 0) {
 		vm_page_lock_assert(m, MA_OWNED);
 		KASSERT(!pmap_page_is_mapped(m),
-		    ("vm_page_free_prep: freeing mapped page %p", m));
+		    ("vm_page_free_prep: freeing mapped page %p in object %p", m, m->object));
 	} else
 		KASSERT(m->queue == PQ_NONE,
 		    ("vm_page_free_prep: unmanaged page %p is queued", m));

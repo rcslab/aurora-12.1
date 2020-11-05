@@ -700,8 +700,8 @@ shm_remove(char *path, Fnv32_t fnv, struct ucred *ucred)
 }
 
 int
-kern_shm_open(struct thread *td, const char *userpath, int flags, mode_t mode,
-    struct filecaps *fcaps)
+kern_shm_open(struct thread *td, const char *shmpath, enum uio_seg seg,
+	int flags, mode_t mode, struct filecaps *fcaps)
 {
 	struct filedesc *fdp;
 	struct shmfd *shmfd;
@@ -717,12 +717,15 @@ kern_shm_open(struct thread *td, const char *userpath, int flags, mode_t mode,
 	/*
 	 * shm_open(2) is only allowed for anonymous objects.
 	 */
-	if (IN_CAPABILITY_MODE(td) && (userpath != SHM_ANON))
+	if (IN_CAPABILITY_MODE(td) && (shmpath != SHM_ANON))
 		return (ECAPMODE);
 #endif
 
 	AUDIT_ARG_FFLAGS(flags);
 	AUDIT_ARG_MODE(mode);
+
+	if (seg == UIO_NOCOPY)
+	    return (EINVAL);
 
 	if ((flags & O_ACCMODE) != O_RDONLY && (flags & O_ACCMODE) != O_RDWR)
 		return (EINVAL);
@@ -745,7 +748,7 @@ kern_shm_open(struct thread *td, const char *userpath, int flags, mode_t mode,
 		return (error);
 
 	/* A SHM_ANON path pointer creates an anonymous object. */
-	if (userpath == SHM_ANON) {
+	if (shmpath == SHM_ANON) {
 		/* A read-only anonymous object is pointless. */
 		if ((flags & O_ACCMODE) == O_RDONLY) {
 			fdclose(td, fp, fd);
@@ -760,8 +763,12 @@ kern_shm_open(struct thread *td, const char *userpath, int flags, mode_t mode,
 		/* Construct a full pathname for jailed callers. */
 		pr_pathlen = strcmp(pr_path, "/") == 0 ? 0
 		    : strlcpy(path, pr_path, MAXPATHLEN);
-		error = copyinstr(userpath, path + pr_pathlen,
-		    MAXPATHLEN - pr_pathlen, NULL);
+		if (seg == UIO_USERSPACE)
+		    error = copyinstr(shmpath, path + pr_pathlen,
+			MAXPATHLEN - pr_pathlen, NULL);
+		else
+		    error = copystr(shmpath, path + pr_pathlen,
+			MAXPATHLEN - pr_pathlen, NULL);
 #ifdef KTRACE
 		if (error == 0 && KTRPOINT(curthread, KTR_NAMEI))
 			ktrnamei(path);
@@ -855,8 +862,8 @@ int
 sys_shm_open(struct thread *td, struct shm_open_args *uap)
 {
 
-	return (kern_shm_open(td, uap->path, uap->flags | O_CLOEXEC, uap->mode,
-	    NULL));
+	return (kern_shm_open(td, uap->path, UIO_USERSPACE,
+		    uap->flags | O_CLOEXEC, uap->mode, NULL));
 }
 
 int

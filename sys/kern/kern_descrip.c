@@ -107,8 +107,6 @@ static int	fd_first_free(struct filedesc *fdp, int low, int size);
 static int	fd_last_used(struct filedesc *fdp, int size);
 static void	fdgrowtable(struct filedesc *fdp, int nfd);
 static void	fdgrowtable_exp(struct filedesc *fdp, int nfd);
-static void	fdunused(struct filedesc *fdp, int fd);
-static void	fdused(struct filedesc *fdp, int fd);
 static int	getmaxfd(struct thread *td);
 static u_long	*filecaps_copy_prep(const struct filecaps *src);
 static void	filecaps_copy_finish(const struct filecaps *src,
@@ -230,7 +228,7 @@ fd_last_used(struct filedesc *fdp, int size)
 	return (-1);
 }
 
-static int
+int
 fdisused(struct filedesc *fdp, int fd)
 {
 
@@ -252,7 +250,7 @@ fdused_init(struct filedesc *fdp, int fd)
 	fdp->fd_map[NDSLOT(fd)] |= NDBIT(fd);
 }
 
-static void
+void
 fdused(struct filedesc *fdp, int fd)
 {
 
@@ -268,7 +266,7 @@ fdused(struct filedesc *fdp, int fd)
 /*
  * Mark a file descriptor as unused.
  */
-static void
+void
 fdunused(struct filedesc *fdp, int fd)
 {
 

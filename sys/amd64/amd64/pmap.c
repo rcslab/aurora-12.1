@@ -5225,7 +5225,7 @@ pmap_protect_pde(pmap_t pmap, pd_entry_t *pde, vm_offset_t sva, vm_prot_t prot)
 
 	PMAP_LOCK_ASSERT(pmap, MA_OWNED);
 	KASSERT((sva & PDRMASK) == 0,
-	    ("pmap_protect_pde: sva is not 2mpage aligned"));
+	    ("pmap_protect_pde: sva %lx is not 2mpage aligned", sva));
 	anychanged = FALSE;
 retry:
 	oldpde = newpde = *pde;
@@ -5254,6 +5254,166 @@ retry:
 			anychanged = TRUE;
 	}
 	return (anychanged);
+}
+
+void
+pmap_protect_pglist(pmap_t pmap, vm_offset_t lower, vm_offset_t upper,
+	vm_offset_t bva, struct pglist *pglist, vm_prot_t prot, uint64_t test)
+{
+	pml4_entry_t *pml4e;
+	pdp_entry_t *pdpe;
+	pd_entry_t ptpaddr, *pde;
+	pt_entry_t *pte, PG_G, PG_M, PG_RW, PG_V;
+	pt_entry_t obits, pbits;
+	vm_offset_t sva;
+	vm_page_t page;
+
+
+	KASSERT((prot & ~VM_PROT_ALL) == 0, ("invalid prot %x", prot));
+	KASSERT(prot != VM_PROT_NONE, ("guard entry for pmap"));
+	KASSERT((prot & (VM_PROT_WRITE|VM_PROT_EXECUTE)) !=
+	    (VM_PROT_WRITE|VM_PROT_EXECUTE), ("entry both writable and executable"));
+
+	/* Make sure we aren't being passed garbage testing wise. */
+	KASSERT(test < AURORA_PMAP_TEST, ("invalid test option %ld", test));
+
+	KASSERT((prot & ~VM_PROT_ALL) == 0, ("invalid prot %x", prot));
+	if (prot == VM_PROT_NONE) {
+		pmap_remove(pmap, lower, upper);
+		return;
+	}
+
+	if ((prot & (VM_PROT_WRITE|VM_PROT_EXECUTE)) ==
+	    (VM_PROT_WRITE|VM_PROT_EXECUTE))
+		return;
+
+
+	PG_G = pmap_global_bit(pmap);
+	PG_M = pmap_modified_bit(pmap);
+	PG_V = pmap_valid_bit(pmap);
+	PG_RW = pmap_rw_bit(pmap);
+
+	/*
+	 * Although this function delays and batches the invalidation
+	 * of stale TLB entries, it does not need to call
+	 * pmap_delayed_invl_start() and
+	 * pmap_delayed_invl_finish(), because it does not
+	 * ordinarily destroy mappings.  Stale TLB entries from
+	 * protection-only changes need only be invalidated before the
+	 * pmap lock is released, because protection-only changes do
+	 * not destroy PV entries.  Even operations that iterate over
+	 * a physical page's PV list of mappings, like
+	 * pmap_remove_write(), acquire the pmap lock for each
+	 * mapping.  Consequently, for protection-only changes, the
+	 * pmap lock suffices to synchronize both page table and TLB
+	 * updates.
+	 *
+	 * This function only destroys a mapping if pmap_demote_pde()
+	 * fails.  In that case, stale TLB entries are immediately
+	 * invalidated.
+	 */
+
+	PMAP_LOCK(pmap);
+	/*
+	 * XXX Somehow find locality in the pages being traversed, then this
+	 * gets much faster because we can loop around the retry.
+	 */
+	TAILQ_FOREACH(page, pglist, listq) {
+		/* Null test, shortcircuit the whole thing. */
+		if (test == AURORA_PMAP_TEST_NULL)
+		    continue;
+
+		/* Get the VA of the page, check it's in the lower limit.  */
+		sva = bva + IDX_TO_OFF(page->pindex);
+		if (sva >= upper)
+		    continue;
+		if (sva < lower)
+		    continue;
+
+		pml4e = pmap_pml4e(pmap, sva);
+		if ((*pml4e & PG_V) == 0)
+			continue;
+
+		pdpe = pmap_pml4e_to_pdpe(pml4e, sva);
+		if ((*pdpe & PG_V) == 0)
+			continue;
+
+		pde = pmap_pdpe_to_pde(pdpe, sva);
+		ptpaddr = *pde;
+
+		/*
+		 * Weed out invalid mappings.
+		 */
+		if (ptpaddr == 0)
+			continue;
+
+		/* 
+		 * PDE traversal test, stop after traversing the PDEs but 
+		 * before getting to the PTEs. 
+		 */
+		if (test == AURORA_PMAP_TEST_PDETRAVERSAL)
+		    continue;
+
+		/*
+		 * Check for large page.
+		 */
+		if ((ptpaddr & PG_PS) != 0) {
+			/*
+			 * We are always protecting the whole large page.
+			 * The TLB entry for a PG_G mapping is
+			 * invalidated by pmap_protect_pde().
+			 */
+			if (((sva & PDRMASK) == 0) && (sva + NBPDR <= upper)) {
+				pmap_protect_pde(pmap, pde, sva, prot);
+				continue;
+			} else if (!pmap_demote_pde(pmap, pde, sva)) {
+				continue;
+			}
+		}
+
+		pte = pmap_pde_to_pte(pde, sva);
+
+		obits = pbits = *pte;
+		if ((pbits & PG_V) == 0)
+			continue;
+
+		/* 
+		 * PTE traversal test, get the page table entry but do nothing.
+		 */
+		if (test == AURORA_PMAP_TEST_PTETRAVERSAL)
+		    continue;
+
+		if ((prot & VM_PROT_WRITE) == 0) {
+			if ((pbits & (PG_MANAGED | PG_M | PG_RW)) ==
+			    (PG_MANAGED | PG_M | PG_RW)) {
+#ifdef INVARIANTS
+				vm_page_t m = PHYS_TO_VM_PAGE(pbits & PG_FRAME);
+				KASSERT(m == page, ("page %p found in pmap not the one (%p) found from the VM object\n", 
+					    m, page));
+#endif
+				vm_page_dirty(page);
+			}
+			pbits &= ~(PG_RW | PG_M);
+		}
+		if ((prot & VM_PROT_EXECUTE) == 0)
+			pbits |= pg_nx;
+
+		/* Stop short of inserting the new bits. */
+		if (test == AURORA_PMAP_TEST_NEWBITS)
+		    continue;
+
+		if (pbits != obits) {
+			*pte = pbits;
+
+			if (test == AURORA_PMAP_TEST_INVALIDATE)
+			    continue;
+
+			if (obits & PG_G)
+				pmap_invalidate_page(pmap, sva);
+		}
+	}
+
+	PMAP_UNLOCK(pmap);
 }
 
 /*
@@ -5337,7 +5497,6 @@ pmap_protect(pmap_t pmap, vm_offset_t sva, vm_offset_t eva, vm_prot_t prot)
 		 */
 		if (ptpaddr == 0)
 			continue;
-
 		/*
 		 * Check for large page.
 		 */

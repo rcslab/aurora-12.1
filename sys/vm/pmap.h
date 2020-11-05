@@ -94,6 +94,10 @@ typedef struct pmap_statistics *pmap_statistics_t;
 #ifdef _KERNEL
 struct thread;
 
+#ifndef VM_PAGE_HAVE_PGLIST
+TAILQ_HEAD(pglist, vm_page);
+#define VM_PAGE_HAVE_PGLIST
+#endif
 /*
  * Updates to kernel_vm_end are synchronized by the kernel_map's system mutex.
  */
@@ -154,6 +158,8 @@ int		 pmap_page_wired_mappings(vm_page_t m);
 int		 pmap_pinit(pmap_t);
 void		 pmap_pinit0(pmap_t);
 void		 pmap_protect(pmap_t, vm_offset_t, vm_offset_t, vm_prot_t);
+void		 pmap_protect_pglist(pmap_t, vm_offset_t, vm_offset_t,
+		vm_offset_t, struct pglist *, vm_prot_t, uint64_t);
 void		 pmap_qenter(vm_offset_t, vm_page_t *, int);
 void		 pmap_qremove(vm_offset_t, int);
 vm_offset_t	 pmap_quick_enter_page(vm_page_t);
@@ -171,6 +177,14 @@ void		 pmap_zero_page_area(vm_page_t, int off, int size);
 
 #define	pmap_resident_count(pm)	((pm)->pm_stats.resident_count)
 #define	pmap_wired_count(pm)	((pm)->pm_stats.wired_count)
+
+#define AURORA_PMAP_TEST_FULL		0
+#define AURORA_PMAP_TEST_PDETRAVERSAL	1
+#define AURORA_PMAP_TEST_PTETRAVERSAL	2
+#define AURORA_PMAP_TEST_NULL		3
+#define AURORA_PMAP_TEST_NEWBITS	4
+#define AURORA_PMAP_TEST_INVALIDATE	5
+#define AURORA_PMAP_TEST		6
 
 #endif /* _KERNEL */
 #endif /* _PMAP_VM_ */

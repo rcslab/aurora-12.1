@@ -109,8 +109,9 @@ struct vm_object {
 	int shadow_count;		/* how many objects that this is a shadow for */
 	vm_memattr_t memattr;		/* default memory attribute for pages */
 	objtype_t type;			/* type of pager */
-	u_short flags;			/* see below */
+	u_int flags;			/* see below */
 	u_short pg_color;		/* (c) color of first page in obj */
+	uint64_t objid;			/* (c) Unique object ID */
 	u_int paging_in_progress;	/* Paging (in or out) so don't collapse or destroy */
 	int resident_page_count;	/* number of resident pages */
 	struct vm_object *backing_object; /* object that I'm a shadow of */
@@ -192,6 +193,9 @@ struct vm_object {
 #define	OBJ_ONEMAPPING	0x2000		/* One USE (a single, non-forked) mapping flag */
 #define	OBJ_DISCONNECTWNT 0x4000	/* disconnect from vnode wanted */
 #define	OBJ_TMPFS	0x8000		/* has tmpfs vnode allocated */
+#define	OBJ_AURORA	0x10000		/* is in the Aurora SLS */
+#define	OBJ_NEEEDSDUMP	0x20000		/* needs to be dumped by Aurora */
+#define	OBJ_AURORA_SHADOW 0x40000	/* is shadowing an Aurora object */
 
 /*
  * Helpers to perform conversion between vm_object page indexes and offsets.
@@ -210,6 +214,13 @@ struct vm_object {
 #define OBJPC_SYNC	0x1			/* sync I/O */
 #define OBJPC_INVAL	0x2			/* invalidate */
 #define OBJPC_NOSYNC	0x4			/* skip if VPO_NOSYNC */
+
+
+/*
+ * The start of the unique object ID counter.
+ */
+#define OBJID_START	(0x5151515151515151ULL)
+#define OBJID_MASK	(0x000fffffffffffffULL)
 
 /*
  * The following options are supported by vm_object_page_remove().
@@ -341,6 +352,10 @@ boolean_t vm_object_sync(vm_object_t, vm_ooffset_t, vm_size_t, boolean_t,
 void vm_object_unwire(vm_object_t object, vm_ooffset_t offset,
     vm_size_t length, uint8_t queue);
 struct vnode *vm_object_vnode(vm_object_t object);
+boolean_t vm_object_sls(vm_object_t object);
+boolean_t vm_object_sls_shadow(vm_object_t object);
+void vm_object_collapse_aurora(vm_object_t object);
+
 #endif				/* _KERNEL */
 
 #endif				/* _VM_OBJECT_ */

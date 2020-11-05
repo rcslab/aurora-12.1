@@ -814,6 +814,7 @@ struct proc {
 #define	SINGLE_EXIT	1
 #define	SINGLE_BOUNDARY	2
 #define	SINGLE_ALLPROC	3
+#define	SINGLE_TOTAL	4
 
 #ifdef MALLOC_DECLARE
 MALLOC_DECLARE(M_PARGS);

@@ -118,10 +118,6 @@ static int	selscan(struct thread *, fd_mask **, fd_mask **, int);
 static int	selrescan(struct thread *, fd_mask **, fd_mask **);
 static void	selfdalloc(struct thread *, void *);
 static void	selfdfree(struct seltd *, struct selfd *);
-static int	dofileread(struct thread *, int, struct file *, struct uio *,
-		    off_t, int);
-static int	dofilewrite(struct thread *, int, struct file *, struct uio *,
-		    off_t, int);
 static void	doselwakeup(struct selinfo *, int);
 static void	seltdinit(struct thread *);
 static int	seltdwait(struct thread *, sbintime_t, sbintime_t);
@@ -340,7 +336,7 @@ kern_preadv(struct thread *td, int fd, struct uio *auio, off_t offset)
  * Common code for readv and preadv that reads data in
  * from a file using the passed in uio, offset, and flags.
  */
-static int
+int
 dofileread(struct thread *td, int fd, struct file *fp, struct uio *auio,
     off_t offset, int flags)
 {
@@ -542,7 +538,7 @@ kern_pwritev(struct thread *td, int fd, struct uio *auio, off_t offset)
  * Common code for writev and pwritev that writes data to
  * a file using the passed in uio, offset, and flags.
  */
-static int
+int
 dofilewrite(struct thread *td, int fd, struct file *fp, struct uio *auio,
     off_t offset, int flags)
 {

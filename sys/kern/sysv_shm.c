@@ -119,9 +119,9 @@ static int shmget_existing(struct thread *td, struct shmget_args *uap,
 #define	SHMSEG_REMOVED  	0x0400
 #define	SHMSEG_ALLOCATED	0x0800
 
-static int shm_last_free, shm_nused, shmalloced;
+int shm_last_free, shm_nused, shmalloced;
 vm_size_t shm_committed;
-static struct shmid_kernel *shmsegs;
+struct shmid_kernel *shmsegs;
 static unsigned shm_prison_slot;
 
 struct shmmap_state {

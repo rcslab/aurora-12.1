@@ -267,4 +267,5 @@ again:
 			PROC_UNLOCK(p);
 		}
 	}
+	bzero(&td->td_sa, sizeof(td->td_sa));
 }

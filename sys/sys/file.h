@@ -251,6 +251,11 @@ int fget_fcntl(struct thread *td, int fd, cap_rights_t *rightsp,
     int needfcntl, struct file **fpp);
 int _fdrop(struct file *fp, struct thread *td);
 
+int dofileread(struct thread *td, int fd, struct file *fp,
+    struct uio *auio, off_t offset, int flags);
+int dofilewrite(struct thread *td, int fd, struct file *fp,
+    struct uio *auio, off_t offset, int flags);
+
 fo_rdwr_t	invfo_rdwr;
 fo_truncate_t	invfo_truncate;
 fo_ioctl_t	invfo_ioctl;

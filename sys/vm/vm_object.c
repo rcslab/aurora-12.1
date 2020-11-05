@@ -161,6 +161,8 @@ SYSCTL_COUNTER_U64(_vm_stats_object, OID_AUTO, bypasses, CTLFLAG_RD,
     &object_bypasses,
     "VM object bypasses");
 
+static uint64_t object_ids = OBJID_START;
+
 static void
 counter_startup(void)
 {
@@ -215,6 +217,7 @@ vm_object_zinit(void *mem, int size, int flags)
 	vm_object_t object;
 
 	object = (vm_object_t)mem;
+
 	rw_init_flags(&object->lock, "vm object", RW_DUPOK | RW_NEW);
 
 	/* These are true for any object that has been freed */
@@ -224,7 +227,7 @@ vm_object_zinit(void *mem, int size, int flags)
 	object->paging_in_progress = 0;
 	object->resident_page_count = 0;
 	object->shadow_count = 0;
-	object->flags = OBJ_DEAD;
+	object->objid = atomic_fetchadd_64(&object_ids, 1);
 
 	mtx_lock(&vm_object_list_mtx);
 	TAILQ_INSERT_TAIL(&vm_object_list, object, object_list);
@@ -500,6 +503,39 @@ vm_object_vndeallocate(vm_object_t object)
 	vrele(vp);
 }
 
+ 
+/*
+ * Try to lock all children of an object.
+ */
+static bool
+vm_object_trylock_children(vm_object_t object)
+{
+	vm_object_t robject, failed_object;
+
+	VM_OBJECT_ASSERT_WLOCKED(object);
+
+	/* Try to lock all children. */
+	LIST_FOREACH(robject, &object->shadow_head, shadow_list) {
+		if (!VM_OBJECT_TRYWLOCK(robject)) {
+			failed_object = robject;
+			/* Undo any successful locks. */
+			LIST_FOREACH(robject, &object->shadow_head, shadow_list) {
+				/* We're done. */
+				if (robject == failed_object)
+					return false;
+
+				VM_OBJECT_ASSERT_WLOCKED(robject);
+				VM_OBJECT_WUNLOCK(robject);
+			}
+
+			panic("Could not find child object");
+		}
+	}
+
+	return true;
+}
+
+
 /*
  *	vm_object_deallocate:
  *
@@ -537,6 +573,46 @@ vm_object_deallocate(vm_object_t object)
 			VM_OBJECT_WUNLOCK(object);
 			return;
 		} else if (object->ref_count == 1) {
+			if (((object->flags & OBJ_AURORA) != 0) &&
+				(object->shadow_count == object->ref_count) &&
+				(object->backing_object != NULL)) {
+				vm_object_t backing_object = object->backing_object;
+				VM_OBJECT_WLOCK(backing_object);
+				if (((backing_object->flags & OBJ_AURORA) != 0) &&
+				    /*
+				     * One reference for the child, one for the
+				     * Aurora module.
+				     */
+					(backing_object->ref_count == 2)) {
+					KASSERT(backing_object->shadow_count == 1, (
+					"ref_count %d, shadow_count %d",
+					backing_object->ref_count,
+					backing_object->shadow_count));
+
+					if (!vm_object_trylock_children(object)) {
+						/*
+						* Avoid a potential deadlock.
+						*/
+						object->ref_count++;
+						VM_OBJECT_WUNLOCK(object);
+						VM_OBJECT_WUNLOCK(backing_object);
+						/*
+						* More likely than not the thread
+						* holding robject's lock has lower
+						* priority than the current thread.
+						* Let the lower priority thread run.
+						*/
+						pause("vmo_de", 1);
+						continue;
+					}
+
+					vm_object_collapse_aurora(object);
+					VM_OBJECT_WUNLOCK(backing_object);
+					return;
+				}
+				VM_OBJECT_WUNLOCK(backing_object);
+			}
+
 			if (object->shadow_count == 0 &&
 			    object->handle == NULL &&
 			    (object->type == OBJT_DEFAULT ||
@@ -580,7 +656,9 @@ vm_object_deallocate(vm_object_t object)
 				if ((robject->flags & OBJ_DEAD) == 0 &&
 				    (robject->handle == NULL) &&
 				    (robject->type == OBJT_DEFAULT ||
-				     robject->type == OBJT_SWAP)) {
+				     robject->type == OBJT_SWAP) &&
+				     (((object->flags & OBJ_AURORA) == 0) ||
+				     ((robject->flags & OBJ_AURORA) == 0))) {
 
 					robject->ref_count++;
 retry:
@@ -612,8 +690,10 @@ retry:
 						object = robject;
 						goto doterm;
 					}
+
 					object = robject;
 					vm_object_collapse(object);
+
 					VM_OBJECT_WUNLOCK(object);
 					continue;
 				}
@@ -1441,6 +1521,32 @@ retry:
 #define	OBSC_COLLAPSE_WAIT	0x0004
 
 static vm_page_t
+vm_object_collapse_aurora_wait(vm_object_t object, vm_page_t p)
+{
+	vm_object_t backing_object;
+
+	VM_OBJECT_ASSERT_WLOCKED(object);
+	backing_object = object->backing_object;
+	VM_OBJECT_ASSERT_WLOCKED(backing_object);
+
+	KASSERT(p == NULL || vm_page_busied(p), ("unbusy page %p", p));
+	KASSERT(p == NULL || p->object == object || p->object == backing_object,
+	    ("invalid ownership %p %p %p", p, object, backing_object));
+	if (p != NULL)
+		vm_page_lock(p);
+	VM_OBJECT_WUNLOCK(object);
+	VM_OBJECT_WUNLOCK(backing_object);
+	/* The page is only NULL when rename fails. */
+	if (p == NULL)
+		vm_radix_wait();
+	else
+		vm_page_busy_sleep(p, "vmocol", false);
+	VM_OBJECT_WLOCK(object);
+	VM_OBJECT_WLOCK(backing_object);
+	return (TAILQ_FIRST(&object->memq));
+}
+
+static vm_page_t
 vm_object_collapse_scan_wait(vm_object_t object, vm_page_t p, vm_page_t next,
     int op)
 {
@@ -1529,7 +1635,7 @@ static bool
 vm_object_collapse_scan(vm_object_t object, int op)
 {
 	vm_object_t backing_object;
-	vm_page_t next, p, pp;
+	vm_page_t p, pp, next;
 	vm_pindex_t backing_offset_index, new_pindex;
 
 	VM_OBJECT_ASSERT_WLOCKED(object);
@@ -1574,7 +1680,7 @@ vm_object_collapse_scan(vm_object_t object, int op)
 			 */
 			vm_page_lock(p);
 			KASSERT(!pmap_page_is_mapped(p),
-			    ("freeing mapped page %p", p));
+			    ("freeing mapped page %p (obj %p)", p, p->object));
 			if (vm_page_remove(p))
 				vm_page_free(p);
 			vm_page_unlock(p);
@@ -1616,7 +1722,7 @@ vm_object_collapse_scan(vm_object_t object, int op)
 				    1);
 			vm_page_lock(p);
 			KASSERT(!pmap_page_is_mapped(p),
-			    ("freeing mapped page %p", p));
+			    ("freeing mapped page %p (obj %p)", p, p->object));
 			if (vm_page_remove(p))
 				vm_page_free(p);
 			vm_page_unlock(p);
@@ -1652,6 +1758,106 @@ vm_object_collapse_scan(vm_object_t object, int op)
 	return (true);
 }
 
+static void
+vm_object_collapse_aurora_scan(vm_object_t object)
+{
+	vm_object_t backing_object;
+	vm_page_t p, pp, next;
+	vm_pindex_t pindex;
+
+	VM_OBJECT_ASSERT_WLOCKED(object);
+	VM_OBJECT_ASSERT_WLOCKED(object->backing_object);
+	backing_object = object->backing_object;
+	KASSERT((object->flags & OBJ_AURORA) != 0,
+	    ("object %p not in aurora", object));
+	KASSERT((backing_object->flags & OBJ_AURORA) != 0,
+	    ("backing object %p not in aurora", backing_object));
+	KASSERT(object->backing_object_offset == 0,
+	    ("Aurora object has offset %ld in backer",
+	    object->backing_object_offset));
+	KASSERT(object->size == backing_object->size,
+	    ("Aurora shadow %p has size %ld, parent %p has size %ld",
+	    object, object->size,
+	    backing_object, backing_object->size));
+
+	/*
+	 * Our scan
+	 */
+	for (p = TAILQ_FIRST(&object->memq); p != NULL; p = next) {
+		next = TAILQ_NEXT(p, listq);
+		pindex = p->pindex;
+
+		/*
+		 * Check for busy page
+		 */
+		if (vm_page_busied(p)) {
+			next = vm_object_collapse_aurora_wait(object, p);
+			continue;
+		}
+
+		KASSERT(p->object == object,
+		    ("vm_object_collapse_scan: object mismatch"));
+
+		pp = vm_page_lookup(backing_object, pindex);
+		if (pp != NULL && vm_page_busied(pp)) {
+			/*
+			 * The page in the parent is busy and possibly not
+			 * (yet) valid.  Until its state is finalized by the
+			 * busy bit owner, we can't tell whether it shadows the
+			 * original page.  Therefore, we must either skip it
+			 * and the original (backing_object) page or wait for
+			 * its state to be finalized.
+			 *
+			 * This is due to a race with vm_fault() where we must
+			 * unbusy the original (backing_obj) page before we can
+			 * (re)lock the parent.  Hence we can get here.
+			 */
+			next = vm_object_collapse_aurora_wait(object, pp);
+			continue;
+		}
+
+		KASSERT(pp == NULL || pp->valid != 0,
+		    ("unbusy invalid page %p", pp));
+
+		if (pp != NULL) {
+			vm_page_lock(pp);
+			KASSERT(!pmap_page_is_mapped(pp),
+			    ("freeing mapped page %p (obj %p)", pp, pp->object));
+			if (vm_page_remove(pp))
+				vm_page_free(pp);
+			vm_page_unlock(pp);
+		}
+
+		if (backing_object->type == OBJT_SWAP)
+			swap_pager_freespace(backing_object, pindex, 1);
+
+		/*
+		 * Page does not exist in parent, rename the page from the
+		 * backing object to the main object.
+		 *
+		 * If the page was mapped to a process, it can remain mapped
+		 * through the rename.  vm_page_rename() will dirty the page.
+		 */
+		if (vm_page_rename(p, backing_object, pindex)) {
+			next = vm_object_collapse_aurora_wait(object, NULL);
+			continue;
+		}
+
+		/*
+		 * XXX If the page is swapped out, move it from the child to the
+		 * parent. This might not even be possible, depending on how the
+		 * swapper allocates pages in the swap partition to the objects.
+		 */
+
+#if VM_NRESERVLEVEL > 0
+		/*
+		 * Rename the reservation.
+		 */
+		vm_reserv_rename(p, backing_object, object, 0);
+#endif
+	}
+}
+
 
 /*
  * this version of collapse allows the operation to occur earlier and
@@ -1670,6 +1876,104 @@ vm_object_qcollapse(vm_object_t object)
 		return;
 
 	vm_object_collapse_scan(object, OBSC_COLLAPSE_NOWAIT);
+}
+
+void
+vm_object_collapse_aurora(vm_object_t object)
+{
+	vm_object_t robject, backing_object, temp;
+
+	VM_OBJECT_ASSERT_WLOCKED(object);
+	backing_object = object->backing_object;
+	KASSERT(backing_object != NULL,
+	    ("%p has no backer to collapse to", object));
+	VM_OBJECT_ASSERT_LOCKED(backing_object);
+
+	/*
+	 * we check the backing object first, because it is most likely
+	 * not collapsable.
+	 */
+	if (backing_object->handle != NULL ||
+	    (backing_object->type != OBJT_DEFAULT &&
+	    backing_object->type != OBJT_SWAP) ||
+	    (backing_object->flags & (OBJ_DEAD | OBJ_NOSPLIT)) != 0 ||
+	    object->handle != NULL ||
+	    (object->type != OBJT_DEFAULT &&
+	     object->type != OBJT_SWAP) ||
+	    (object->flags & OBJ_DEAD))
+		goto noop;
+
+	if (object->paging_in_progress != 0 ||
+	    backing_object->paging_in_progress != 0)
+		goto noop;
+
+	if (((object->flags & OBJ_AURORA) == 0) ||
+		((backing_object->flags & OBJ_AURORA) == 0) ||
+		(backing_object->type != OBJT_DEFAULT))
+		goto noop;
+
+	vm_object_pip_add(object, 1);
+	vm_object_pip_add(backing_object, 1);
+
+	/*
+	 * Collapse the child into the parent, not the 
+	 * opposite.
+	 */
+	vm_object_collapse_aurora_scan(object);
+	/* Add the object's child into the parent as a 
+	 * shadow, fix up its own pointer, remove the 
+	 * object from the backing object, destroy it. 
+	 * */
+
+#if VM_NRESERVLEVEL > 0
+	if (__predict_false(!LIST_EMPTY(&object->rvq)))
+		vm_reserv_break_all(object);
+#endif
+
+	/* Remove the children from the object. */
+	LIST_FOREACH_SAFE(robject, &object->shadow_head, shadow_list, temp) {
+		VM_OBJECT_ASSERT_LOCKED(robject);
+		KASSERT(robject->backing_object == object,
+		    ("obj %p has child %p with parent %p", object, robject,
+		    robject->backing_object));
+
+		LIST_REMOVE(robject, shadow_list);
+		object->shadow_count--;
+		object->ref_count--;
+
+		LIST_INSERT_HEAD(&backing_object->shadow_head,
+		robject, shadow_list);
+		robject->backing_object = backing_object;
+		robject->backing_object_offset = object->backing_object_offset;
+		backing_object->shadow_count++;
+		backing_object->ref_count++;
+
+		VM_OBJECT_WUNLOCK(robject);
+	}
+
+	LIST_REMOVE(object, shadow_list);
+	backing_object->shadow_count--;
+	backing_object->ref_count--;
+	object->backing_object = NULL;
+	object->backing_object_offset = 0;
+
+	/* We can now destroy the object. */
+	vm_object_pip_wakeup(object);
+	object->type = OBJT_DEAD;
+	KASSERT(object->ref_count == 0, ("refcnt %d after Aurora collapse", object->ref_count));
+	VM_OBJECT_WUNLOCK(object);
+	vm_object_destroy(object);
+
+	vm_object_pip_wakeup(backing_object);
+
+	counter_u64_add(object_collapses, 1);
+	return;
+noop:
+	LIST_FOREACH(robject, &object->shadow_head, shadow_list)
+	    VM_OBJECT_WUNLOCK(robject);
+
+	VM_OBJECT_WUNLOCK(object);
+	return;
 }
 
 /*
@@ -1737,6 +2041,7 @@ vm_object_collapse(vm_object_t object)
 			 * If there is exactly one reference to the backing
 			 * object, we can collapse it into the parent.
 			 */
+
 			vm_object_collapse_scan(object, OBSC_COLLAPSE_WAIT);
 
 #if VM_NRESERVLEVEL > 0

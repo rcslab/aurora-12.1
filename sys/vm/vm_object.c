@@ -584,10 +584,6 @@ vm_object_deallocate(vm_object_t object)
 				     * Aurora module.
 				     */
 					(backing_object->ref_count == 2)) {
-					KASSERT(backing_object->shadow_count == 1, (
-					"ref_count %d, shadow_count %d",
-					backing_object->ref_count,
-					backing_object->shadow_count));
 
 					if (!vm_object_trylock_children(object)) {
 						/*

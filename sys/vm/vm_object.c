@@ -175,6 +175,7 @@ SYSINIT(object_counters, SI_SUB_CPU, SI_ORDER_ANY, counter_startup, NULL);
 static uma_zone_t obj_zone;
 
 static int vm_object_zinit(void *mem, int size, int flags);
+static int vm_object_zctor(void *mem, int size, void *arg, int flags);
 
 #ifdef INVARIANTS
 static void vm_object_zdtor(void *mem, int size, void *arg);
@@ -212,6 +213,17 @@ vm_object_zdtor(void *mem, int size, void *arg)
 #endif
 
 static int
+vm_object_zctor(void *mem, int size, void *args, int flags)
+{
+	vm_object_t object;
+
+	object = (vm_object_t)mem;
+	object->objid = atomic_fetchadd_64(&object_ids, 1);
+
+	return(0);
+}
+
+static int
 vm_object_zinit(void *mem, int size, int flags)
 {
 	vm_object_t object;
@@ -227,7 +239,6 @@ vm_object_zinit(void *mem, int size, int flags)
 	object->paging_in_progress = 0;
 	object->resident_page_count = 0;
 	object->shadow_count = 0;
-	object->objid = atomic_fetchadd_64(&object_ids, 1);
 
 	mtx_lock(&vm_object_list_mtx);
 	TAILQ_INSERT_TAIL(&vm_object_list, object, object_list);
@@ -316,7 +327,7 @@ vm_object_init(void)
 	 * to vm_pageout_fallback_object_lock locking a vm object
 	 * without holding any references to it.
 	 */
-	obj_zone = uma_zcreate("VM OBJECT", sizeof (struct vm_object), NULL,
+	obj_zone = uma_zcreate("VM OBJECT", sizeof (struct vm_object), vm_object_zctor,
 #ifdef INVARIANTS
 	    vm_object_zdtor,
 #else

@@ -5265,6 +5265,7 @@ pmap_protect_pglist(pmap_t pmap, vm_offset_t lower, vm_offset_t upper,
 	pd_entry_t ptpaddr, *pde;
 	pt_entry_t *pte, PG_G, PG_M, PG_RW, PG_V;
 	pt_entry_t obits, pbits;
+	boolean_t anychanged;
 	vm_offset_t sva;
 	vm_page_t page;
 
@@ -5292,6 +5293,7 @@ pmap_protect_pglist(pmap_t pmap, vm_offset_t lower, vm_offset_t upper,
 	PG_M = pmap_modified_bit(pmap);
 	PG_V = pmap_valid_bit(pmap);
 	PG_RW = pmap_rw_bit(pmap);
+	anychanged = FALSE;
 
 	/*
 	 * Although this function delays and batches the invalidation
@@ -5364,7 +5366,8 @@ pmap_protect_pglist(pmap_t pmap, vm_offset_t lower, vm_offset_t upper,
 			 * invalidated by pmap_protect_pde().
 			 */
 			if (((sva & PDRMASK) == 0) && (sva + NBPDR <= upper)) {
-				pmap_protect_pde(pmap, pde, sva, prot);
+				if (pmap_protect_pde(pmap, pde, sva, prot))
+					anychanged = TRUE;
 				continue;
 			} else if (!pmap_demote_pde(pmap, pde, sva)) {
 				continue;
@@ -5410,8 +5413,13 @@ pmap_protect_pglist(pmap_t pmap, vm_offset_t lower, vm_offset_t upper,
 
 			if (obits & PG_G)
 				pmap_invalidate_page(pmap, sva);
+			else
+				anychanged = TRUE;
 		}
 	}
+
+	if (anychanged)
+		pmap_invalidate_all(pmap);
 
 	PMAP_UNLOCK(pmap);
 }

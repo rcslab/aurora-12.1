@@ -384,3 +384,6 @@ device		netmap			# netmap(4) support
 options 	EVDEV_SUPPORT		# evdev support in legacy drivers
 device		evdev			# input event device support
 device		uinput			# install /dev/uinput cdev
+
+# VM options
+options		VM_NRESERVLEVEL=0	# don't even attempt to create superpages

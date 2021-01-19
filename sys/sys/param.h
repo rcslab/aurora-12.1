@@ -362,4 +362,6 @@ __END_DECLS
  */
 #define __PAST_END(array, offset) (((__typeof__(*(array)) *)(array))[offset])
 
+#define AURORA_VERSION (1)
+
 #endif	/* _SYS_PARAM_H_ */

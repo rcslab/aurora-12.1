@@ -1903,7 +1903,9 @@ vm_object_collapse_aurora(vm_object_t object)
 	if (backing_object->handle != NULL ||
 	    (backing_object->type != OBJT_DEFAULT &&
 	    backing_object->type != OBJT_SWAP) ||
-	    (backing_object->flags & (OBJ_DEAD | OBJ_NOSPLIT)) != 0 ||
+	    (backing_object->flags & OBJ_DEAD) != 0 ||
+	    (backing_object->flags & (OBJ_NOSPLIT | OBJ_AURORA))
+	     	== OBJ_NOSPLIT ||
 	    object->handle != NULL ||
 	    (object->type != OBJT_DEFAULT &&
 	     object->type != OBJT_SWAP) ||

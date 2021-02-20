@@ -365,6 +365,7 @@ struct thread {
 	int		td_oncpu;	/* (t) Which cpu we are on. */
 	void		*td_lkpi_task;	/* LinuxKPI task struct pointer */
 	int		td_pmcpend;
+	uint64_t	td_oldtid;	/* (c) Old thread ID. */
 #ifdef __amd64__
 	struct mdthread td_md;		/* (k) Any machine-dependent fields. */
 #endif

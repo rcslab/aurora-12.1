@@ -98,6 +98,7 @@ SDT_PROBE_DEFINE1(proc, , , exit, "int");
 
 /* Hook for NFS teardown procedure. */
 void (*nlminfo_release_p)(struct proc *p);
+void (*slsmetr_exit_hook)(struct proc *p);
 
 EVENTHANDLER_LIST_DECLARE(process_exit);
 
@@ -276,6 +277,10 @@ exit1(struct thread *td, int rval, int signo)
 	p->p_flag &= ~P_STOPPED_SIG;
 	KASSERT(!P_SHOULDSTOP(p), ("exiting process is stopped"));
 
+	if ((slsmetr_exit_hook != NULL) && (p->p_auroid != 0))
+		slsmetr_exit_hook(p);
+
+	/*
 	/*
 	 * Note that we are exiting and do another wakeup of anyone in
 	 * PIOCWAIT in case they aren't listening for S_EXIT stops or
@@ -284,7 +289,6 @@ exit1(struct thread *td, int rval, int signo)
 	p->p_flag |= P_WEXIT;
 	wakeup(&p->p_stype);
 
-	/*
 	 * Wait for any processes that have a hold on our vmspace to
 	 * release their reference.
 	 */

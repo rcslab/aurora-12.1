@@ -281,7 +281,6 @@ exit1(struct thread *td, int rval, int signo)
 		slsmetr_exit_hook(p);
 
 	/*
-	/*
 	 * Note that we are exiting and do another wakeup of anyone in
 	 * PIOCWAIT in case they aren't listening for S_EXIT stops or
 	 * decided to wait again after we told them we are exiting.
@@ -289,6 +288,7 @@ exit1(struct thread *td, int rval, int signo)
 	p->p_flag |= P_WEXIT;
 	wakeup(&p->p_stype);
 
+	/*
 	 * Wait for any processes that have a hold on our vmspace to
 	 * release their reference.
 	 */

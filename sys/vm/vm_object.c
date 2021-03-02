@@ -218,7 +218,7 @@ vm_object_zctor(void *mem, int size, void *args, int flags)
 	vm_object_t object;
 
 	object = (vm_object_t)mem;
-	object->objid = atomic_fetchadd_64(&object_ids, 1);
+	object->objid = atomic_fetchadd_64(&object_ids, 0x1000);
 
 	return(0);
 }

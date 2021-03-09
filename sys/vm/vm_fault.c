@@ -115,6 +115,8 @@ __FBSDID("$FreeBSD$");
 
 #define	VM_FAULT_DONTNEED_MIN	1048576
 
+void (*vm_fault_metropolis_hook)(vm_map_entry_t entry);
+
 struct faultstate {
 	vm_page_t m;
 	vm_object_t object;
@@ -607,6 +609,9 @@ RetryFault_oom:
 		unlock_vp(&fs);
 		return (result);
 	}
+
+	if (vm_fault_metropolis_hook != NULL)
+		vm_fault_metropolis_hook(fs.entry);
 
 	fs.map_generation = fs.map->timestamp;
 

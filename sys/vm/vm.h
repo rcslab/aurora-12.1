@@ -158,5 +158,7 @@ void swap_release(vm_ooffset_t decr);
 void swap_release_by_cred(vm_ooffset_t decr, struct ucred *cred);
 void swapper(void);
 
+extern void (*vm_fault_metropolis_hook)(vm_map_entry_t entry);
+
 #endif				/* VM_H */
 
